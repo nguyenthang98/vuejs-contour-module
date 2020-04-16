@@ -32,6 +32,7 @@ new Vue({
         yDirection: 'up',
         colorLegendTicks: 50,
         showColorScaleLegend: true,
+        pixelPerNode: 1,
     },
     methods: {
         onDataChanged: function(changedData) {

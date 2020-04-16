@@ -31,6 +31,7 @@
                 y-direction-get="rootCtrl.getter('yDirection')"
                 wells-get="rootCtrl.getter('wells')"
                 show-well-get="rootCtrl.getter('showWell')"
+                pixel-per-node-get="rootCtrl.getter('pixelPerNode')"
                 trajectories-get="rootCtrl.getter('trajectories')"
                 show-trajectory-get="rootCtrl.getter('showTrajectory')"
                 on-component-mounted-get="rootCtrl.getter('onContourViewMounted')"
@@ -49,6 +50,9 @@
                 max-val-get="rootCtrl.getter('maxValue')">
             </color-scale-generator>
             <div>
+                <label>px/node</label>
+                <input type="number" ng-model="rootCtrl.pixelPerNode"/>
+                <br/>
                 <label>Negative import</label>
                 <input type="checkbox" ng-model="rootCtrl.negativeData"/>
                 <br/>

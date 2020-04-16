@@ -20,7 +20,7 @@ const template = `
         :show-trajectory='showTrajectory' :trajectories='trajectories'
         :show-label="showLabel" :label-font-size="labelFontSize"
         :show-color-scale-legend="showColorScaleLegend" :color-legend-ticks="colorLegendTicks"
-        :negative-data="negativeData"
+        :negative-data="negativeData" :pixel-per-node="pixelPerNode"
         :on-component-mounted="onComponentMounted"
         :on-scale-changed="onScaleChanged">
     </contour-view>

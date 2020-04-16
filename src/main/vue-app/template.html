@@ -8,7 +8,7 @@
         :show-grid="showGrid" :grid-major="gridMajor" :grid-minor="gridMinor" :grid-nice="gridNice"
         :y-direction="yDirection" :show-scale="showScale"
         :show-color-scale-legend="showColorScaleLegend" :color-legend-ticks="colorLegendTicks"
-        :negative-data="negativeData"
+        :negative-data="negativeData" :pixel-per-node="pixelPerNode"
         :show-label="showLabel" :label-font-size="fontSize" :on-scale-changed="(_scl) => scale = _scl">
     </contour-view>
     </div>
@@ -19,6 +19,9 @@
         :on-scale-changed="onColorScaleChanged"
         :min-val="minValue" :max-val="maxValue"></color-scale-generator>
     <div>
+        <label>px/node</label>
+        <input type="number" v-model="pixelPerNode"/>
+        <br/>
         <label>Negative Import</label>
         <input type="checkbox" v-model="negativeData"/>
         <label>color legend histogram bins</label>

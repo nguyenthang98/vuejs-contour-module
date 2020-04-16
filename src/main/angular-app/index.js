@@ -28,6 +28,7 @@ angular
         this.colorBarHeight= 20;
         this.negativeData = false;
         this.showColorScaleLegend = true;
+        this.pixelPerNode = 1;
         this.trajectories = [
             {
                 points: [

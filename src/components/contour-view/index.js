@@ -1,6 +1,7 @@
 import Vue from "vue/dist/vue.min.js";
 import "!style-loader!css-loader!./style.css";
 import * as d3 from "d3";
+import proj4 from "proj4";
 import _ from "lodash";
 import template from "./template.html";
 import "../../vendors/ctxtextpath";
@@ -16,7 +17,7 @@ const component = {
         'wells', "showWell",
         'trajectories', 'showTrajectory',
         "showColorScaleLegend", 'colorLegendTicks',
-        "negativeData",
+        "negativeData", 'pixelPerNode',
         'onComponentMounted'
     ],
     template,
@@ -125,12 +126,10 @@ const component = {
             console.log("vue - colorLegendTicks changed");
             updateContourDataDebounced(this.$refs.drawContainer, this.dataFn, 'color');
         },
-        /*
-        negativeData: function(val) {
-            console.log("vue - negativeData changed");
+        pixelPerNode: function(val) {
+            console.log("vue - pixelPerNode changed");
             updateContourDataDebounced(this.$refs.drawContainer, this.dataFn, 'all');
-        }
-        */
+        },
     },
     methods: {
         setCenter: function(xCoord, yCoord) {
@@ -139,17 +138,27 @@ const component = {
             // neccessary transforms
             const canvasDOM = this.__contour.d3Canvas.node();
             const zoomBehavior = this.__contour.zoomBehavior;
+            /*
             const nodeToPixelX = canvasDOM.__nodeToPixelX;
             const nodeToPixelY = canvasDOM.__nodeToPixelY;
+            */
+            const nodeToPixel = canvasDOM.__nodeToPixel;
             const nodeToCoord = canvasDOM.__gridToCoordinate;
 
             const nodeCoord = nodeToCoord.invert({x: xCoord, y: yCoord});
+            const pixelPoint = nodeToPixel(nodeCoord);
+            /*
             const pixelX = nodeToPixelX(nodeCoord.x);
             const pixelY = nodeToPixelY(nodeCoord.y);
+            */
             const transformed = d3.zoomTransform(canvasDOM);
 
+            const addX = (canvasDOM.width/2 - (pixelPoint.x * transformed.k  + transformed.x)) / transformed.k;
+            const addY = (canvasDOM.height/2 - (pixelPoint.y * transformed.k + transformed.y)) / transformed.k;
+            /*
             const addX = (canvasDOM.width/2 - (pixelX * transformed.k  + transformed.x)) / transformed.k;
             const addY = (canvasDOM.height/2 - (pixelY * transformed.k + transformed.y)) / transformed.k;
+            */
 
             if (!_.isFinite(addX) || !_.isFinite(addY)) return;
 
@@ -162,6 +171,7 @@ const component = {
             return {
                 values: this.values,
                 negativeData: this.negativeData,
+                pixelPerNode: this.pixelPerNode,
                 wells: this.wells,
                 trajectories: this.trajectories,
                 width: this.nRows,
@@ -243,9 +253,7 @@ function updateContourData(container, dataFn, forceDrawTarget=null) {
     const context = d3Canvas.node().getContext("2d");
     const data = dataFn();
 
-    // scale to pixel: 1 grid node ~ 1 pixel
-    const gridToScreenX = d3.scaleLinear();
-    const gridToScreenY = d3.scaleLinear();
+    if (!data.width || !data.height) return;
 
     // projection scale: 1 grid cell ~ xy coordinate
     const gridToCoordinate = function(gridWidth, gridHeight, minX, maxX, minY, maxY, yDirection) {
@@ -257,17 +265,6 @@ function updateContourData(container, dataFn, forceDrawTarget=null) {
         const scaleY = d3.scaleLinear()
             .domain([0, 1])
             .range(_rangeScaleY);
-        /*
-        const scaleX = d3.scaleLinear()
-            .domain([0, gridWidth])
-            .range([minX, maxX]);
-
-        const _yIsUp = yDirection == 'up';
-        const _rangeScaleY = _yIsUp ? [maxY, minY]:[minY, maxY];
-        const scaleY = d3.scaleLinear()
-            .domain([0, gridHeight])
-            .range(_rangeScaleY);
-        */
         const invert = function(coordinate) {
             return {
                 x: scaleX.invert(coordinate.x),
@@ -284,8 +281,71 @@ function updateContourData(container, dataFn, forceDrawTarget=null) {
         forward.invert = invert;
         return forward;
     }
+    const node2UTMZone = gridToCoordinate(data.width, data.height, data.minX, data.maxX, data.minY, data.maxY, data.yDirection);
 
-    if (!data.width || !data.height) return;
+    // scale to pixel
+    const nodeToPixel = function(width, height, minX, minY, maxX, maxY, utmZone) {
+        const UTM2LatLong = function({x, y}) {
+            const firstProjection = utmZone;
+            const secondProjection = "+proj=longlat +ellps=WGS84 +datum=WGS84 +units=degrees";
+            const projected = proj4(firstProjection, secondProjection, [x, y]);
+            return {lat: projected[1], lng: projected[0]};
+        }
+        const latLong2UTM = function({lat, lng}) {
+            const firstProjection = "+proj=longlat +ellps=WGS84 +datum=WGS84 +units=degrees";
+            const secondProjection = utmZone;
+            const projected = proj4(firstProjection, secondProjection, [lng, lat]);
+            return {x: projected[0], y: projected[1]};
+        }
+        const latLngMin = UTM2LatLong({x: minX, y: minY});
+        const latLngMax = UTM2LatLong({x: maxX, y: maxY});
+        const geoJsonFeatures = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {},
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [ latLngMin.lng, latLngMin.lat ]
+                    }
+                },
+                {
+                    "type": "Feature",
+                    "properties": {},
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [ latLngMax.lng, latLngMax.lat ]
+                    }
+                }
+            ]
+        }
+        const latLong2Pixel = d3.geoMercator()
+            .fitSize([width, height], geoJsonFeatures)
+
+        const invert = function(pixel) {
+            const [lng, lat] = latLong2Pixel.invert([pixel.x, pixel.y]);
+            const pointXY = latLong2UTM({lat, lng});
+            const gridPoint = node2UTMZone.invert(pointXY);
+            return {
+                x: gridPoint.x,
+                y: gridPoint.y
+            };
+        }
+        const forward = function(node) {
+            const utmXY = node2UTMZone(node);
+            const latLng = UTM2LatLong(utmXY);
+            const projectedPoint = latLong2Pixel([latLng.lng, latLng.lat]);
+            // const rootPoint = latLong2Pixel([latLngMin.lng, latLngMin.lat]);
+            return {
+                x: projectedPoint[0], // - rootPoint.x,
+                y: projectedPoint[1] //- rootPoint.y
+            };
+        }
+
+        forward.invert = invert;
+        return forward;
+    }
 
     // prepare data for contour;
     const negativeData = data.negativeData;
@@ -298,6 +358,8 @@ function updateContourData(container, dataFn, forceDrawTarget=null) {
         .thresholds(threshold)
         (contourValues);
     const gridToCoordinateTransform = gridToCoordinate(data.width, data.height, data.minX, data.maxX, data.minY, data.maxY, data.yDirection);
+    data.utmZone = "+proj=utm +zone=49 +ellps=WGS84 +datum=WGS84 +units=m +no_defs";
+    const gridToPixel = nodeToPixel(data.width, data.height, data.minX, data.minY, data.maxX, data.maxY, data.utmZone);
     Object.assign(contourData, {
         majorEvery: data.majorEvery,
         showLabel: data.showLabel,
@@ -316,9 +378,12 @@ function updateContourData(container, dataFn, forceDrawTarget=null) {
             nice: data.gridNice,
             width: data.width,
             height: data.height,
+            nodeToPixel: gridToPixel,
+            /*
             nodeXToPixel: gridToScreenX,
             nodeYToPixel: gridToScreenY,
-            nodeToCoordinate: gridToCoordinateTransform,
+            */
+            nodeToCoordinate: node2UTMZone,
             majorTick: data.gridMajor,
             minorTick: data.gridMinor,
             minX: data.minX, maxX: data.maxX,
@@ -330,8 +395,11 @@ function updateContourData(container, dataFn, forceDrawTarget=null) {
 
     // temporary save transform
     const canvasDOM = d3Canvas.node();
+    /*
     canvasDOM.__nodeToPixelX = gridToScreenX;
     canvasDOM.__nodeToPixelY = gridToScreenY;
+    */
+    canvasDOM.__nodeToPixel = gridToPixel;
     canvasDOM.__gridToCoordinate = gridToCoordinateTransform;
 
     drawContour(d3Container, contourData, null, forceDrawTarget);
@@ -356,8 +424,11 @@ function getGrid(contourData, transform) {
     const pixelScale = transform ? transform.k : 1;
 
     const nodeCellToZoneCoordinate = contourData.grid.nodeToCoordinate;
+    const nodeToPixel = contourData.grid.nodeToPixel;
+    /*
     const nodeXToPixel = contourData.grid.nodeXToPixel;
     const nodeYToPixel = contourData.grid.nodeYToPixel;
+    */
 
     const genNiceTicks = contourData.grid.nice || false;;
 
@@ -390,13 +461,23 @@ function getGrid(contourData, transform) {
         .map((colCoordinate, idx) => {
             const nodeStartPoint = nodeCellToZoneCoordinate.invert({x: colCoordinate, y: maxY});
             const nodeEndPoint = nodeCellToZoneCoordinate.invert({x: colCoordinate, y: minY})
+            const startPointInPx = nodeToPixel(nodeStartPoint);
             const startPointPx = {
+                x: startPointInPx.x * pixelScale,
+                y: startPointInPx.y * pixelScale
+                /*
                 x: nodeXToPixel(nodeStartPoint.x) * pixelScale,
                 y: nodeYToPixel(nodeStartPoint.y) * pixelScale
+                */
             }
+            const endPointInPx = nodeToPixel(nodeEndPoint);
             const endPointPx = {
+                x: endPointInPx.x * pixelScale,
+                y: endPointInPx.y * pixelScale
+                /*
                 x: nodeXToPixel(nodeEndPoint.x) * pixelScale,
                 y: nodeYToPixel(nodeEndPoint.y) * pixelScale
+                */
             }
             const startIsLo = startPointPx.y < endPointPx.y;
             return {
@@ -411,14 +492,24 @@ function getGrid(contourData, transform) {
         .range(desiredStartY, desiredStopY + desiredStepY, desiredStepY)
         .map((rowCoordinate, idx) => {
             const nodeStartPoint = nodeCellToZoneCoordinate.invert({x: minX, y: rowCoordinate});
-            const nodeEndPoint = nodeCellToZoneCoordinate.invert({x: maxX, y: rowCoordinate})
+            const startPointInPx = nodeToPixel(nodeStartPoint);
             const startPointPx = {
+                x: startPointInPx.x * pixelScale,
+                y: startPointInPx.y * pixelScale
+                /*
                 x: nodeXToPixel(nodeStartPoint.x) * pixelScale,
                 y: nodeYToPixel(nodeStartPoint.y) * pixelScale
+                */
             }
+            const nodeEndPoint = nodeCellToZoneCoordinate.invert({x: maxX, y: rowCoordinate})
+            const endPointInPx = nodeToPixel(nodeEndPoint);
             const endPointPx = {
+                x: endPointInPx.x * pixelScale,
+                y: endPointInPx.y * pixelScale
+                /*
                 x: nodeXToPixel(nodeEndPoint.x) * pixelScale,
                 y: nodeYToPixel(nodeEndPoint.y) * pixelScale
+                */
             }
             const startIsLo = startPointPx.x < endPointPx.x;
             return {
@@ -432,10 +523,11 @@ function getGrid(contourData, transform) {
     return {rows:rowData, cols: colData};
 }
 
-function getPath2Ds(contourData, transform, xToPixel, yToPixel) {
+function getPath2Ds(contourData, transform) {
     // console.log("%c vue - recalculating paths", 'color: red');
+    const nodeToPixel = contourData.grid.nodeToPixel;
     const path2Ds = contourData
-        .map(d => contourDataToPixelMap(d, transform, xToPixel, yToPixel))
+        .map(d => contourDataToPixelMap(d, transform, nodeToPixel))
         .map((contour, i) => {
             const path = d3.geoPath()(contour);
             return Object.assign(new Path2D(path), {
@@ -450,8 +542,12 @@ function getScalePosition(contourData, transform, d3Canvas) {
     // console.log("%c vue - recalculating scale", 'color: red');
     const screenWidth = d3Canvas.node().width;
     const screenHeight = d3Canvas.node().height;
+
+    const nodeToPixel = contourData.grid.nodeToPixel;
+    /*
     const nodeXToPixel = contourData.grid.nodeXToPixel;
     const nodeYToPixel = contourData.grid.nodeYToPixel;
+    */
     const zoomedScale = transform ? transform.k : 1;
     const nodeCellToZoneCoordinate = contourData.grid.nodeToCoordinate;
 
@@ -459,15 +555,20 @@ function getScalePosition(contourData, transform, d3Canvas) {
 
     // get scale indicator for x dimension
     let cellUnit = step;
+    while(nodeToPixel({x: cellUnit, y: 0}) * zoomedScale < SCALE_INDICATOR_MAX_WIDTH)
+        cellUnit += step;
+    /*
     while(nodeXToPixel(cellUnit) * zoomedScale < SCALE_INDICATOR_MAX_WIDTH)
         cellUnit += step;
+    */
 
     const rootCoordinateValue = nodeCellToZoneCoordinate({x: 0, y: 0});
-    let cellUnitCoordinateValue = nodeCellToZoneCoordinate({x: cellUnit, y: cellUnit});
+    const cellUnitCoordinateValue = nodeCellToZoneCoordinate({x: cellUnit, y: cellUnit});
 
     const _valueX = _.round(cellUnitCoordinateValue.x - rootCoordinateValue.x, 1);
     const startX = {
-        x: (screenWidth) - 30 - nodeXToPixel(cellUnit) * zoomedScale,
+        // x: (screenWidth) - 30 - nodeXToPixel(cellUnit) * zoomedScale,
+        x: (screenWidth) - 30 - nodeToPixel({ x: cellUnit, y: 0}).x * zoomedScale,
         y: (screenHeight) - 30,
         value: _valueX,
     }
@@ -514,16 +615,25 @@ function getWellsPosition(contourData, transform) {
     // console.log("%c vue - recalculating wells", 'color: red');
     const wPos = [];
     const wells = contourData.wells || [];
+
+    const nodeToPixel = contourData.grid.nodeToPixel;
+    /*
     const nodeXToPixel = contourData.grid.nodeXToPixel;
     const nodeYToPixel = contourData.grid.nodeYToPixel;
+    */
     const zoomedScale = transform ? transform.k : 1;
     const nodeCellToZoneCoordinate = contourData.grid.nodeToCoordinate;
 
     wells.forEach(well => {
         const nodePos = nodeCellToZoneCoordinate.invert({x: well.xCoord, y: well.yCoord});
+        const wellPixel = nodeToPixel(nodePos);
         wPos.push({
+            /*
             x: nodeXToPixel(nodePos.x) * zoomedScale,
             y: nodeYToPixel(nodePos.y) * zoomedScale,
+            */
+            x: wellPixel.x * zoomedScale,
+            y: wellPixel.y * zoomedScale,
             well
         })
     })
@@ -535,17 +645,26 @@ function getTrajectoriesPosition(contourData, transform) {
     // console.log("%c vue - recalculating trajectories", 'color: red');
     const tPos = [];
     const trajectories = contourData.trajectories || [];
+
+    const nodeToPixel = contourData.grid.nodeToPixel;
+    /*
     const nodeXToPixel = contourData.grid.nodeXToPixel;
     const nodeYToPixel = contourData.grid.nodeYToPixel;
+    */
     const zoomedScale = transform ? transform.k : 1;
     const nodeCellToZoneCoordinate = contourData.grid.nodeToCoordinate;
 
     trajectories.forEach(trajectory => {
         const points = trajectory.points.map(p => {
             const nodePos = nodeCellToZoneCoordinate.invert({x: p.xCoord, y: p.yCoord});
+            const pPixel = nodeToPixel(nodePos);
             return {
+                x: pPixel.x * zoomedScale,
+                y: pPixel.y * zoomedScale,
+                /*
                 x: nodeXToPixel(nodePos.x) * zoomedScale,
                 y: nodeYToPixel(nodePos.y) * zoomedScale,
+                */
             }
         });
         tPos.push({
@@ -629,10 +748,8 @@ function drawContour(d3Container, contourData, transform, force=null) {
 
     if (!cachedContourData.grid) return;
 
-    const gridNodeXtoPixel = cachedContourData.grid.nodeXToPixel;
-    const gridNodeYtoPixel = cachedContourData.grid.nodeYToPixel;
     cachedPath2Ds = (scaleChanged || force=="all" || force=="path")
-        ? getPath2Ds(cachedContourData, cachedTransform, gridNodeXtoPixel, gridNodeYtoPixel)
+        ? getPath2Ds(cachedContourData, cachedTransform)
         : cachedPath2Ds;
     cachedGrid = (scaleChanged || force=="all" || force=="grid")
         ? getGrid(cachedContourData, cachedTransform)
@@ -903,7 +1020,7 @@ function drawContour(d3Container, contourData, transform, force=null) {
             const trajectories = cachedTrajectoriesPosition || [];
             trajectories.forEach(t => {
                 if (!t.points.length || t.points.length == 1) return;
-                context.strokeStyle = t.trajectory.color || 'steelblue';
+                context.strokeStyle = t.trajectory.color || 'black';
                 context.lineWidth = t.trajectory.lineWidth || 1;
                 context.beginPath();
                 t.points.forEach((tp, tpIdx) => {
@@ -990,14 +1107,15 @@ function drawContour(d3Container, contourData, transform, force=null) {
     // context.restore();
 }
 
-function contourDataToPixelMap({type, value, coordinates}, transform, xToPixel, yToPixel) {
+function contourDataToPixelMap({type, value, coordinates}, transform, nodeToPixel) {
     const _transform = transform || {x: 0, y: 0, k: 1};
     return {type, value, coordinates: coordinates.map(rings => {
         return rings.map(points => {
             return points.map(([x, y]) => {
+                const pixelPoint = nodeToPixel({x, y});
                 return [
-                    xToPixel(x) * _transform.k /*+ _transform.x*/,
-                    yToPixel(y) * _transform.k /*+ _transform.y*/,
+                    pixelPoint.x * _transform.k,
+                    pixelPoint.y * _transform.k,
                 ];
             })
         })
